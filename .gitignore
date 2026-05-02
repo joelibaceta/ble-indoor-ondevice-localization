@@ -9,4 +9,8 @@ __pycache__
 scripts/
 tests/
 
+# Modelos joblib / sklearn (cualquier ruta)
 *.joblib
+
+# Salida del script de entrenamiento (métricas, PNGs, etc.)
+data/results/
