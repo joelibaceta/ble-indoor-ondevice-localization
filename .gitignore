@@ -9,5 +9,4 @@ __pycache__
 scripts/
 tests/
 
-# Salida de entrenamiento (p. ej. model.joblib ~50+ MB); no versionar
-data/results/
+*.joblib
