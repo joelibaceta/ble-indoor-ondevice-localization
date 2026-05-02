@@ -1,0 +1,8 @@
+env
+.venv
+memory.md
+.matplotlib
+__pycache__
+
+# Artefactos de entrenamiento (regenerables con scripts/train_fingerprint_model.py)
+data/results/

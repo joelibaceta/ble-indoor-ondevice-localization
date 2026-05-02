@@ -1,0 +1,25 @@
+OMNeT++ (or other simulator) CSV consumed by ble_indoor
+=======================================================
+
+Encoding: UTF-8, comma-separated.
+
+Required columns
+----------------
+  x_m, y_m
+      Badge position (m). Same frame as config/baseline_room.yaml: origin bottom-left,
+      y up, x right.
+
+  rssi_<id>
+      One column per gateway; <id> must match gateways[].id in the YAML (e.g. A1…A4).
+      Values in dBm.
+
+Optional columns (preserved if present)
+-----------------------------------------
+  time_s, session_id, run_id, zone_id, zone_name
+
+If zone_id / zone_name are present, they are overwritten from x_m, y_m and spatial_zones
+in the YAML (so changing nx/ny does not require editing old CSVs by hand).
+
+Loader: ble_indoor.simulation.omnet_trace_loader.load_omnet_training_trace
+
+Schema-only example: simulations/omnet/examples/minimal_valid_example.csv
