@@ -1,4 +1,4 @@
-"""Load RSSI/position training traces from CSV (OMNeT++ or compatible)."""
+"""Load RSSI/position training traces from CSV (any simulator: path loss, Sionna RT, or compatible)."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ def _required_rssi_columns(env: Environment) -> list[str]:
     return [f"rssi_{gid}" for gid in env.gateway_ids]
 
 
-def load_omnet_training_trace(
+def load_training_trace(
     path: str | Path,
     environment: Environment,
     spatial_zones: SpatialZoneMap,
@@ -24,8 +24,7 @@ def load_omnet_training_trace(
     """Parse CSV: required x_m, y_m, rssi_<gateway_id>; optional columns kept.
 
     ``zone_id`` / ``zone_name`` are always recomputed from ``x_m``, ``y_m`` and the given
-    ``spatial_zones`` so they stay consistent with ``config/baseline_room.yaml`` (OMNeT
-    exports may carry labels from an older grid).
+    ``spatial_zones`` so they stay consistent with ``config/baseline_room.yaml``.
     """
     path = Path(path)
     df = pd.read_csv(path)
@@ -43,12 +42,12 @@ def load_omnet_training_trace(
     return out
 
 
-def load_omnet_trace_points_only(path: str | Path, environment: Environment) -> pd.DataFrame:
+def load_trace_points_only(path: str | Path, environment: Environment) -> pd.DataFrame:
     """Return x_m, y_m and rssi_* columns only (no zone labels)."""
     path = Path(path)
     df = pd.read_csv(path)
     req = ["x_m", "y_m", *_required_rssi_columns(environment)]
     missing = [c for c in req if c not in df.columns]
     if missing:
-        raise ValueError(f"Missing columns for OMNeT point cloud: {missing}")
+        raise ValueError(f"Missing columns for trace point cloud: {missing}")
     return df[req].copy()

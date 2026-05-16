@@ -14,3 +14,5 @@ tests/
 
 # Salida del script de entrenamiento (métricas, PNGs, etc.)
 data/results/
+.claude
+memory.md

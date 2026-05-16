@@ -23,7 +23,7 @@ from ble_indoor.models.features import rssi_feature_matrix
 from ble_indoor.models.knn_position import KnnFingerprintPositionModel
 from ble_indoor.models.knn_zone import ZONE_ID_COLUMN, KnnZoneClassifier
 from ble_indoor.settings import ProjectConfig, ProjectLayout
-from ble_indoor.simulation.omnet_trace_loader import load_omnet_training_trace
+from ble_indoor.simulation.trace_loader import load_training_trace
 from ble_indoor.simulation.path_loss import PathLossSimulator
 from ble_indoor.simulation.ports import RssiObservationSource
 
@@ -61,7 +61,7 @@ class BaselineStudy:
 
     def train_dataset_csv_path(self) -> Path:
         """Path from `omnet.training_trace_csv` in config (resolved to repo root)."""
-        rel = self.config.omnet.training_trace_csv
+        rel = self.config.training_data.training_trace_csv
         if rel:
             return self.layout.resolve_repo_path(rel)
         return self.layout.data_simulated_dir() / "trajectory_fingerprints.csv"
@@ -74,7 +74,7 @@ class BaselineStudy:
     ) -> pd.DataFrame:
         """Load OMNeT-compatible training trace CSV."""
         path = Path(csv_path)
-        df = load_omnet_training_trace(path, self.environment, self.config.spatial_zones)
+        df = load_training_trace(path, self.environment, self.config.spatial_zones)
         self.dataset_mode = "omnet_trace"
         self._test_positions_grid = None
         out = self.train_dataset_csv_path()
@@ -88,7 +88,7 @@ class BaselineStudy:
 
     def load_training_trace_from_config(self, *, strict: bool = False) -> pd.DataFrame | None:
         """Load `omnet.training_trace_csv` if set and file exists; else None. strict raises if missing."""
-        rel = self.config.omnet.training_trace_csv
+        rel = self.config.training_data.training_trace_csv
         if not rel:
             return None
         path = self.layout.resolve_repo_path(rel)
@@ -106,13 +106,13 @@ class BaselineStudy:
         save: bool = True,
     ) -> pd.DataFrame:
         """Fingerprint grid RSSI from OMNeT point cloud via `OmnetTraceRssiSource` interpolation."""
-        from ble_indoor.simulation.omnet_interpolated_source import OmnetTraceRssiSource
-        from ble_indoor.simulation.omnet_trace_loader import load_omnet_trace_points_only
+        from ble_indoor.simulation.interpolated_trace_source import InterpolatedTraceRssiSource
+        from ble_indoor.simulation.trace_loader import load_trace_points_only
 
-        pts = load_omnet_trace_points_only(omnet_trace_csv, self.environment)
+        pts = load_trace_points_only(omnet_trace_csv, self.environment)
         self._omnet_point_cloud = pts.copy()
         k = min(int(k_interp), max(3, len(pts)))
-        src: RssiObservationSource = OmnetTraceRssiSource(pts, self.environment, k_neighbors=k)
+        src: RssiObservationSource = InterpolatedTraceRssiSource(pts, self.environment, k_neighbors=k)
         gb = GridFingerprintDatasetBuilder(self.environment, self.config.fingerprint_grid, src)
         df = gb.build_train_dataframe()
         zids, znames = self.config.spatial_zones.label_xy_batch(
@@ -140,12 +140,12 @@ class BaselineStudy:
         save: bool = True,
     ) -> pd.DataFrame:
         """Synthetic trajectory with RSSI interpolated from an OMNeT point-cloud CSV."""
-        from ble_indoor.simulation.omnet_interpolated_source import OmnetTraceRssiSource
-        from ble_indoor.simulation.omnet_trace_loader import load_omnet_trace_points_only
+        from ble_indoor.simulation.interpolated_trace_source import InterpolatedTraceRssiSource
+        from ble_indoor.simulation.trace_loader import load_trace_points_only
 
-        pts = load_omnet_trace_points_only(omnet_trace_csv, self.environment)
+        pts = load_trace_points_only(omnet_trace_csv, self.environment)
         self._omnet_point_cloud = pts.copy()
-        src: RssiObservationSource = OmnetTraceRssiSource(pts, self.environment, k_neighbors=k_interp)
+        src: RssiObservationSource = InterpolatedTraceRssiSource(pts, self.environment, k_neighbors=k_interp)
         builder = TrajectoryFingerprintDatasetBuilder(
             self.environment,
             self.config.trajectory,
@@ -340,7 +340,7 @@ class BaselineStudy:
         use_grid_style: bool,
     ) -> np.ndarray:
         """RSS matrix (N, G) for batch of positions."""
-        from ble_indoor.simulation.omnet_interpolated_source import OmnetTraceRssiSource
+        from ble_indoor.simulation.interpolated_trace_source import InterpolatedTraceRssiSource
 
         env = self.environment
         rows: list[np.ndarray] = []
@@ -348,13 +348,13 @@ class BaselineStudy:
         traj = self.config.trajectory
         use_omnet_cloud = self._omnet_point_cloud is not None and self._omnet_point_cloud.shape[0] >= 3
         k_cloud = min(24, len(self._omnet_point_cloud)) if use_omnet_cloud else 0
-        omnet_src: OmnetTraceRssiSource | None = (
-            OmnetTraceRssiSource(self._omnet_point_cloud, env, k_neighbors=k_cloud)
+        omnet_src: InterpolatedTraceRssiSource | None = (
+            InterpolatedTraceRssiSource(self._omnet_point_cloud, env, k_neighbors=k_cloud)
             if use_omnet_cloud and not use_grid_style
             else None
         )
-        omnet_src_grid: OmnetTraceRssiSource | None = (
-            OmnetTraceRssiSource(self._omnet_point_cloud, env, k_neighbors=k_cloud)
+        omnet_src_grid: InterpolatedTraceRssiSource | None = (
+            InterpolatedTraceRssiSource(self._omnet_point_cloud, env, k_neighbors=k_cloud)
             if use_omnet_cloud and use_grid_style
             else None
         )

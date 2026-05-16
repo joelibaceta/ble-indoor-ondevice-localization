@@ -13,7 +13,7 @@ from sklearn.model_selection import train_test_split
 from ble_indoor import FingerprintKnnEstimator, FingerprintRfEstimator, ProjectConfig, ProjectLayout
 from ble_indoor.evaluation.knn_sweep import sweep_k_neighbors
 from ble_indoor.models.knn_zone import ZONE_ID_COLUMN
-from ble_indoor.simulation.omnet_trace_loader import load_omnet_training_trace
+from ble_indoor.simulation.trace_loader import load_training_trace
 
 ModelId = Literal["knn", "rf"]
 
@@ -31,6 +31,7 @@ class FingerprintTrainResult:
 def train_fingerprint_model(
     repo_root: Path,
     *,
+    config_path: Path | None = None,
     model: ModelId = "knn",
     no_sweep: bool = False,
     k_sweep_max: int = 30,
@@ -38,8 +39,8 @@ def train_fingerprint_model(
     test_size: float = 0.25,
 ) -> FingerprintTrainResult:
     """
-    Carga el CSV de ``omnet.training_trace_csv``, hace split train/val, ajusta el modelo,
-    guarda ``model.joblib``, ``metrics.json`` y figuras bajo ``data/results/<model>/``.
+    Carga el CSV de entrenamiento, hace split train/val, ajusta el modelo y guarda
+    artefactos bajo ``data/results/<exp>/<model>/`` (exp = nombre del archivo de config).
 
     Importa módulos que usan Matplotlib solo aquí dentro, para permitir ``matplotlib.use('Agg')``
     en el entrypoint antes de llamar a esta función.
@@ -48,11 +49,12 @@ def train_fingerprint_model(
     from ble_indoor.evaluation.training_figures import write_fingerprint_training_figures
 
     layout = ProjectLayout(repo_root)
-    cfg = ProjectConfig.load(layout.default_config_path())
-    csv_path = layout.resolve_repo_path(cfg.omnet.training_trace_csv)
+    cfg_path = config_path or layout.default_config_path()
+    cfg = ProjectConfig.load(cfg_path)
+    csv_path = layout.resolve_repo_path(cfg.training_data.training_trace_csv)
     if not csv_path.is_file():
         raise FileNotFoundError(f"No training CSV at {csv_path}")
-    df = load_omnet_training_trace(csv_path, cfg.environment, cfg.spatial_zones)
+    df = load_training_trace(csv_path, cfg.environment, cfg.spatial_zones)
 
     y_zone = df[ZONE_ID_COLUMN].to_numpy(dtype=np.int64)
     counts = np.bincount(y_zone, minlength=cfg.spatial_zones.n_zones)
@@ -61,7 +63,11 @@ def train_fingerprint_model(
         df, test_size=test_size, random_state=random_state, shuffle=True, stratify=strat
     )
 
-    results_dir = layout.model_results_dir(model)
+    exp_name = Path(cfg_path).stem
+    if exp_name == "baseline_room":
+        results_dir = layout.model_results_dir(model)
+    else:
+        results_dir = layout.data_results_dir() / exp_name / model
     results_dir.mkdir(parents=True, exist_ok=True)
 
     metrics: dict[str, Any] = {

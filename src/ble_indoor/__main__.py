@@ -31,8 +31,10 @@ def _cmd_train(args: argparse.Namespace) -> None:
     from ble_indoor.train.fingerprint import fingerprint_artifact_paths, train_fingerprint_model
 
     root = _bootstrap_paths()
+    config_path = Path(args.config).resolve() if args.config else None
     result = train_fingerprint_model(
         root,
+        config_path=config_path,
         model=args.model,
         no_sweep=args.no_sweep,
         k_sweep_max=args.k_sweep_max,
@@ -47,14 +49,32 @@ def _cmd_train(args: argparse.Namespace) -> None:
 def _cmd_generate_csv(args: argparse.Namespace) -> None:
     _bootstrap_paths()
     from ble_indoor import BaselineStudy, ProjectLayout
+    from ble_indoor.simulation.ports import RssiObservationSource
 
     root = _repo_root()
     layout = ProjectLayout(root)
-    study = BaselineStudy(layout)
+    config_path = Path(args.config).resolve() if args.config else None
+    study = BaselineStudy(layout, config_path=config_path)
     out = study.train_dataset_csv_path()
     if out.is_file() and not args.force:
         raise SystemExit(f"Refusing to overwrite {out} (use --force).")
-    df = study.generate_base_dataset("trajectory", save=True)
+
+    src: RssiObservationSource | None = None
+    if args.simulator == "sionna":
+        try:
+            from ble_indoor.simulation.sionna_rt_simulator import SionnaRTSimulator
+        except ImportError as exc:
+            raise SystemExit(
+                "Sionna RT no está instalado. Ejecutar:\n"
+                "  pip install -r requirements-sionna.txt\n"
+                f"Error original: {exc}"
+            ) from exc
+        print(f"[generate-csv] Usando SionnaRTSimulator (cache: {study.config.sionna_rt.cache_file})")
+        src = SionnaRTSimulator(study.environment, study.config.sionna_rt, layout_root=root)
+    else:
+        print("[generate-csv] Usando PathLossSimulator (analítico)")
+
+    df = study.generate_base_dataset("trajectory", save=True, rssi_source=src)
     print(out.resolve())
     print("rows", len(df))
 
@@ -69,10 +89,10 @@ def _cmd_baseline(args: argparse.Namespace) -> None:
 
     df_cfg = study.load_training_trace_from_config()
     if df_cfg is not None:
-        print("Dataset:", study.config.omnet.training_trace_csv)
+        print("Dataset:", study.config.training_data.training_trace_csv)
     else:
         trace = Path(
-            os.environ.get("OMNET_TRAINING_TRACE", layout.data_simulated_dir() / "omnet_training_trace.csv")
+            os.environ.get("TRAINING_TRACE_CSV", layout.data_simulated_dir() / "training_trace.csv")
         )
         if trace.is_file():
             study.load_training_trace_from_omnet(trace, save_copy=True)
@@ -81,10 +101,9 @@ def _cmd_baseline(args: argparse.Namespace) -> None:
             print("ALLOW_LEGACY_PATHLOSS: synthetic trajectory (Python path loss).")
             study.generate_base_dataset("trajectory", save=True)
         else:
-            example = root / "simulations/omnet/examples/minimal_valid_example.csv"
+            example = root / "simulations/examples/minimal_valid_example.csv"
             raise SystemExit(
                 f"No training CSV at {trace}\n"
-                "simulations/omnet/EXPORT_FORMAT.txt\n"
                 f"{example}\n"
                 "ALLOW_LEGACY_PATHLOSS=1 enables synthetic trajectory."
             )
@@ -120,10 +139,18 @@ def main() -> None:
     t.add_argument("--model", choices=("knn", "rf"), default="knn")
     t.add_argument("--no-sweep", action="store_true", help="(kNN) Sin gráfico validation_vs_k")
     t.add_argument("--k-sweep-max", type=int, default=30, metavar="K")
+    t.add_argument("--config", default=None, metavar="YAML", help="Ruta al YAML de configuración (default: config/baseline_room.yaml)")
     t.set_defaults(func=_cmd_train)
 
-    g = sub.add_parser("generate-csv", help="CSV sintético path-loss (trayectoria)")
+    g = sub.add_parser("generate-csv", help="CSV de entrenamiento (path loss o Sionna RT)")
     g.add_argument("--force", action="store_true")
+    g.add_argument(
+        "--simulator",
+        choices=("pathloss", "sionna"),
+        default="pathloss",
+        help="Fuente RSSI: 'pathloss' (analítico, default) o 'sionna' (Sionna RT ray tracing, requiere requirements-sionna.txt)",
+    )
+    g.add_argument("--config", default=None, metavar="YAML", help="Ruta al YAML de configuración (default: config/baseline_room.yaml)")
     g.set_defaults(func=_cmd_generate_csv)
 
     b = sub.add_parser("baseline", help="Estudio baseline (holdout, kNN zona/posición, interferencia)")

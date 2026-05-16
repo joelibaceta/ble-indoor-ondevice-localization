@@ -1,0 +1,54 @@
+# Gateways: 4, inset 1 m from each corner
+# Room: 12x8 m — baseline size
+room:
+  width_m: 12.0
+  height_m: 8.0
+
+gateways:
+  - {id: A1, x_m:  1.0, y_m: 1.0, tx_power_dbm: -59.0}
+  - {id: A2, x_m: 11.0, y_m: 1.0, tx_power_dbm: -59.0}
+  - {id: A3, x_m:  1.0, y_m: 7.0, tx_power_dbm: -59.0}
+  - {id: A4, x_m: 11.0, y_m: 7.0, tx_power_dbm: -59.0}
+
+rssi_model:
+  path_loss_exponent: 2.2
+  noise_sigma_db: 3.0
+  min_distance_m: 0.5
+
+fingerprint:
+  train_grid_spacing_m: 1.0
+  train_samples_per_point: 40
+  random_seed: 42
+
+baseline:
+  k_neighbors: 3
+  weights: distance
+  standardize_rssi: true
+
+spatial_zones:
+  nx: 3
+  ny: 2
+
+trajectory_dataset:
+  n_sessions: 14
+  steps_per_session: 320
+  step_m: 0.35
+  brownian_std_m: 0.1
+  start_margin_m: 0.45
+  gateway_reception_prob: 0.86
+  min_visible_gateways: 3
+  missing_rssi_dbm: -105.0
+  seed: 42
+
+zone_knn:
+  k_neighbors: 15
+  weights: distance
+
+fingerprint_rf:
+  n_estimators: 150
+  max_depth: 16
+  random_state: 42
+  standardize_rssi: true
+
+training_data:
+  training_trace_csv: "data/simulated/corners_4gw_12x8/training_trace.csv"

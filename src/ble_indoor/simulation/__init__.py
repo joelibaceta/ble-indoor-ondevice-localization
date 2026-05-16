@@ -1,12 +1,14 @@
-from ble_indoor.simulation.omnet_interpolated_source import OmnetTraceRssiSource
-from ble_indoor.simulation.omnet_trace_loader import load_omnet_training_trace, load_omnet_trace_points_only
+from ble_indoor.simulation.interpolated_trace_source import InterpolatedTraceRssiSource
 from ble_indoor.simulation.path_loss import PathLossSimulator
 from ble_indoor.simulation.ports import RssiObservationSource
+from ble_indoor.simulation.trace_loader import load_trace_points_only, load_training_trace
 
 __all__ = [
-    "OmnetTraceRssiSource",
+    "InterpolatedTraceRssiSource",
     "PathLossSimulator",
     "RssiObservationSource",
-    "load_omnet_trace_points_only",
-    "load_omnet_training_trace",
+    "load_trace_points_only",
+    "load_training_trace",
+    # SionnaRTSimulator: importar explícitamente desde simulation.sionna_rt_simulator
+    # (requiere: pip install -r requirements-sionna.txt)
 ]

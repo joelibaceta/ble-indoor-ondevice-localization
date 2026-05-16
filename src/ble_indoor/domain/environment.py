@@ -47,8 +47,8 @@ class Environment:
         room_cfg = raw["room"]
         room = Room(width_m=float(room_cfg["width_m"]), height_m=float(room_cfg["height_m"]))
         gw_list = raw["gateways"]
-        if len(gw_list) != 4:
-            raise ValueError(f"Expected 4 gateways, got {len(gw_list)}")
+        if len(gw_list) < 2:
+            raise ValueError(f"Need at least 2 gateways, got {len(gw_list)}")
         gateways: list[Gateway] = []
         for item in gw_list:
             gateways.append(

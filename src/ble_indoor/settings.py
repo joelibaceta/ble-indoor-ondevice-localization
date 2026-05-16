@@ -78,7 +78,7 @@ class ZoneKnnSettings:
 
 
 @dataclass(frozen=True)
-class OmnetSettings:
+class TrainingDataSettings:
     """OMNeT++ trace CSV path (relative to repo or absolute)."""
 
     training_trace_csv: str | None
@@ -95,6 +95,22 @@ class FingerprintRfSettings:
 
 
 @dataclass(frozen=True)
+class SionnaRTSettings:
+    """Sionna RT ray-tracing simulator config (requires pip install -r requirements-sionna.txt)."""
+
+    carrier_frequency_hz: float
+    max_depth: int
+    num_samples: int
+    grid_resolution_m: float
+    gateway_height_m: float
+    rx_height_m: float
+    wall_material: str
+    cache_file: str | None
+    wall_conductivity: float | None
+    wall_permittivity: float | None
+
+
+@dataclass(frozen=True)
 class ProjectConfig:
     environment: Environment
     fingerprint_grid: FingerprintGridSettings
@@ -103,7 +119,8 @@ class ProjectConfig:
     baseline_knn: BaselineKnnSettings
     zone_knn: ZoneKnnSettings
     fingerprint_rf: FingerprintRfSettings
-    omnet: OmnetSettings
+    training_data: TrainingDataSettings
+    sionna_rt: SionnaRTSettings
 
     @classmethod
     def load(cls, config_path: str | Path) -> ProjectConfig:
@@ -155,11 +172,11 @@ class ProjectConfig:
             raise ValueError("zone_knn.weights must be 'uniform' or 'distance'")
         zone_knn = ZoneKnnSettings(k_neighbors=int(zk.get("k_neighbors", 7)), weights=w2)  # type: ignore[arg-type]
 
-        om = raw.get("omnet", {})
-        trace_csv = om.get("training_trace_csv")
+        td = raw.get("training_data", raw.get("omnet", {}))
+        trace_csv = td.get("training_trace_csv")
         if trace_csv is not None and not isinstance(trace_csv, str):
-            raise TypeError("omnet.training_trace_csv must be a string path or null")
-        omnet = OmnetSettings(training_trace_csv=str(trace_csv) if trace_csv else None)
+            raise TypeError("training_data.training_trace_csv must be a string path or null")
+        training_data = TrainingDataSettings(training_trace_csv=str(trace_csv) if trace_csv else None)
 
         rfo = raw.get("fingerprint_rf", {})
         md = rfo.get("max_depth")
@@ -170,6 +187,20 @@ class ProjectConfig:
             standardize_rssi=bool(rfo.get("standardize_rssi", True)),
         )
 
+        srt = raw.get("sionna_rt", {})
+        sionna_rt = SionnaRTSettings(
+            carrier_frequency_hz=float(srt.get("carrier_frequency_hz", 2.4e9)),
+            max_depth=int(srt.get("max_depth", 5)),
+            num_samples=int(srt.get("num_samples", 1_000_000)),
+            grid_resolution_m=float(srt.get("grid_resolution_m", 0.25)),
+            gateway_height_m=float(srt.get("gateway_height_m", 2.5)),
+            rx_height_m=float(srt.get("rx_height_m", 1.0)),
+            wall_material=str(srt.get("wall_material", "concrete")),
+            cache_file=str(srt["cache_file"]) if srt.get("cache_file") else None,
+            wall_conductivity=float(srt["wall_conductivity"]) if "wall_conductivity" in srt else None,
+            wall_permittivity=float(srt["wall_permittivity"]) if "wall_permittivity" in srt else None,
+        )
+
         return cls(
             environment=env,
             fingerprint_grid=fingerprint_grid,
@@ -178,5 +209,6 @@ class ProjectConfig:
             baseline_knn=baseline_knn,
             zone_knn=zone_knn,
             fingerprint_rf=fingerprint_rf,
-            omnet=omnet,
+            training_data=training_data,
+            sionna_rt=sionna_rt,
         )

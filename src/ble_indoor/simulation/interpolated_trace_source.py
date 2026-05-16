@@ -1,4 +1,4 @@
-"""KD-tree interpolation over an OMNeT (x,y,RSSI) point cloud; implements `RssiObservationSource`."""
+"""KD-tree interpolation over a (x,y,RSSI) simulator point cloud; implements `RssiObservationSource`."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from ble_indoor.domain.environment import Environment
 from ble_indoor.simulation.ports import RssiObservationSource
 
 
-class OmnetTraceRssiSource:
-    """Interpolate RSSI from trace rows (x_m, y_m, rssi_*)."""
+class InterpolatedTraceRssiSource:
+    """Interpolate RSSI from trace rows (x_m, y_m, rssi_*) using KD-tree weighted average."""
 
     def __init__(
         self,
