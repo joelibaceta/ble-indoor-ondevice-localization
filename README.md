@@ -1,6 +1,6 @@
 # BLE Indoor On-Device Localization
 
-Prototipo de investigación para **localización indoor BLE en el dispositivo** mediante fingerprinting de RSSI. El sistema entrena modelos compactos kNN / Random Forest sobre observaciones RSSI simuladas y evalúa su precisión y robustez, con el objetivo de ejecutar inferencia directamente en un badge Nordic con recursos limitados — sin conectividad al backend.
+Prototipo de investigación para **localización indoor BLE en el dispositivo** mediante fingerprinting de RSSI. El sistema entrena modelos compactos (kNN, Random Forest, MLP) sobre observaciones RSSI simuladas y evalúa su precisión bajo diferentes distribuciones de gateways y dos simuladores de canal — uno analítico y uno de ray tracing físico. El objetivo es ejecutar inferencia directamente en un badge Nordic con recursos limitados, sin conectividad al backend.
 
 ---
 
@@ -31,7 +31,7 @@ Este proyecto investiga si un **modelo de fingerprinting compacto ejecutado en e
 - Reducción del tráfico BLE (transmitir posición, no RSSI en crudo)
 - Baselines desplegables para clasificación de zonas y estimación continua de posición
 
-Se comparan dos fuentes de datos de entrenamiento — un modelo analítico de path loss y un simulador de ray tracing físico (Sionna RT) — y se evalúan modelos kNN y Random Forest bajo condiciones de canal nominales y degradadas.
+Se comparan dos fuentes de datos de entrenamiento — un modelo analítico de path loss y un simulador de ray tracing físico (Sionna RT) — y se evalúan tres modelos (kNN, Random Forest, MLP) bajo 7 configuraciones de gateways. El MLP se puede exportar a **TFLite INT8** para inferencia directa en hardware embebido.
 
 ---
 
@@ -184,20 +184,38 @@ El primer run precomputa una grilla RSSI (1.536 puntos × 4 gateways a resoluci�
 ### 3. Entrenar un modelo fingerprint
 
 ```bash
-# kNN con k-sweep automático
+# kNN (incluye gráfico de k-sweep)
 PYTHONPATH=src python -m ble_indoor train --model knn
 
 # Random Forest
 PYTHONPATH=src python -m ble_indoor train --model rf
+
+# MLP
+PYTHONPATH=src python -m ble_indoor train --model mlp
+
+# MLP + exportar a TFLite INT8 para despliegue en badge
+PYTHONPATH=src python -m ble_indoor train --model mlp --export-tflite
 ```
 
-### 4. Correr el estudio baseline completo
+### 4. Correr todos los experimentos en lote
 
 ```bash
-PYTHONPATH=src python -m ble_indoor baseline
+# Todos los experimentos, los 3 modelos, con Sionna RT
+PYTHONPATH=src python experiments/sweep.py --simulator sionna --models knn rf mlp --force
+
+# Solo path loss (más rápido, sin TensorFlow)
+PYTHONPATH=src python experiments/sweep.py --models knn rf mlp --force
 ```
 
-Imprime zona accuracy, RMSE de posición y métricas de robustez a interferencia.
+El resumen se guarda en `data/results/sweep_summary.csv` con una fila por `(simulador, experimento, modelo)`.
+
+### 5. Explorar resultados en el notebook
+
+```bash
+jupyter lab notebooks/fingerprint_models.ipynb
+```
+
+Parte 1 entrena automáticamente todos los experimentos y genera gráficas comparativas. Parte 2 permite análisis detallado de un experimento individual.
 
 ---
 
@@ -295,11 +313,11 @@ Rápido y determinista. Adecuado para prototipos y verificaciones de reproducibi
 Ray tracing físico usando [Sionna RT](https://nvlabs.github.io/sionna/) (NVIDIA). La habitación se modela como una escena rectangular cerrada Mitsuba 3 (suelo, techo, 4 paredes) con propiedades de material de hormigón ITU-R P.2040.
 
 **Flujo de trabajo:**
-1. Construye una grilla 2D de posiciones RX a la resolución configurada.
-2. Ejecuta el `PathSolver` de Sionna una vez sobre todos los puntos de la grilla y gateways.
-3. Convierte ganancias de path a dBm: `RSSI = 10·log₁₀(Σ|aᵢ|²) + TxPower_dBm`.
-4. Guarda la grilla en caché en un archivo `.npz` (invalidado automáticamente al cambiar la config).
-5. En tiempo de consulta, usa un KD-tree con ponderación inversa a la distancia (k=4) para interpolar RSSI en posiciones arbitrarias.
+1. Construye una escena Mitsuba 3 rectangular (suelo + techo + 4 paredes como meshes PLY) con material concreto ITU-R P.2040.
+2. Ejecuta `scene.coverage_map()` de Sionna RT una vez por config, obteniendo la ganancia de path sobre una grilla 2D regular a resolución 0.25 m.
+3. Convierte la ganancia lineal a RSSI dBm: `RSSI = 10·log₁₀(gain) + TxPower_dBm + FSPL(1m)`.
+4. Guarda la grilla en caché en un archivo `.npz` (invalidado automáticamente al cambiar la config mediante hash SHA-256).
+5. En tiempo de consulta, usa un KD-tree con interpolación ponderada por distancia inversa (k=4 vecinos) para obtener RSSI en posiciones arbitrarias.
 
 | | PathLoss | Sionna RT |
 |---|---|---|
@@ -331,15 +349,65 @@ Ambos estimadores se serializan con `joblib`.
 
 ### MLP Fingerprint Estimator
 
-Red neuronal multicapa con dos cabezas sklearn:
+Red neuronal multicapa de dos cabezas implementada con `sklearn.neural_network`. Ambas cabezas comparten la misma extracción de features pero se entrenan de forma independiente.
 
-- **Regresión de posición** — `MLPRegressor(hidden_layer_sizes=[128,64,32], activation=relu)` → `(x_m, y_m)`
-- **Clasificación de zona** — `MLPClassifier` con la misma arquitectura → `zone_id`
+#### Arquitectura
 
-El `StandardScaler` se bake-a opcionalmente en la primera capa. Soporta exportación a **TFLite INT8** para despliegue en Nordic / Cortex-M4 vía TFLite Micro:
+```
+Entrada: [rssi_A1, rssi_A2, …, rssi_AN]      N = número de gateways (dBm)
+              │
+    ┌─────────┴─────────┐
+    │   StandardScaler   │  opcional (standardize_rssi: true)
+    │   x' = (x−μ) / σ  │  μ y σ calculados sobre el set de entrenamiento
+    └─────────┬─────────┘
+              │
+    ┌─────────┴─────────┐
+    │   Dense(128, ReLU) │
+    └─────────┬─────────┘
+              │
+    ┌─────────┴─────────┐
+    │   Dense( 64, ReLU) │
+    └─────────┬─────────┘
+              │
+    ┌─────────┴─────────┐
+    │   Dense( 32, ReLU) │
+    └────────┬┬─────────┘
+             ││
+      ┌──────┘└──────┐
+      │               │
+┌─────┴──────┐  ┌─────┴──────┐
+│ Dense(2)   │  │ Dense(K)   │   K = número de zonas
+│  lineal    │  │  softmax   │
+└─────┬──────┘  └─────┬──────┘
+      │               │
+   (x̂, ŷ)          zone_id
+ posición (m)     ∈ {0 … K-1}
+```
+
+Entrenamiento con `early_stopping=True` (ventana de 40 epochs sin mejora, 10% validación interna). El `StandardScaler` se ajusta solo sobre el conjunto de entrenamiento y se serializa junto con los pesos.
+
+#### Exportación a TFLite
+
+El scaler se bake-a como una capa `tf.keras.layers.Normalization` al exportar, de modo que el badge recibe RSSI crudo sin preprocesamiento externo:
+
+```
+TFLite (posición):
+  Input  [float32, N]
+  → Normalization(mean=μ, variance=σ²)   ← StandardScaler baked
+  → Dense(128, relu)
+  → Dense( 64, relu)
+  → Dense( 32, relu)
+  → Dense(  2, linear)                   ← (x̂, ŷ) en metros
+```
+
+Con cuantización INT8 el modelo cabe en ~12 KB de flash — viable en Nordic nRF5340 (1 MB flash, 512 KB RAM).
 
 ```bash
+# Exportar después de entrenar
 PYTHONPATH=src python -m ble_indoor train --model mlp --export-tflite
+
+# Float32 sin cuantizar (más grande, máxima precisión)
+PYTHONPATH=src python -m ble_indoor train --model mlp --export-tflite --no-quantize
 ```
 
 ---
@@ -411,17 +479,20 @@ Las configuraciones de experimentos viven en `experiments/configs/`. Cada archiv
 ### Correr el sweep
 
 ```bash
-# Todos los experimentos, ambos modelos
-PYTHONPATH=src python experiments/sweep.py --force
+# Todos los experimentos, 3 modelos, con Sionna RT
+PYTHONPATH=src python experiments/sweep.py --simulator sionna --models knn rf mlp --force
+
+# Solo path loss (sin TensorFlow, rápido)
+PYTHONPATH=src python experiments/sweep.py --models knn rf mlp --force
 
 # Configs específicas
 PYTHONPATH=src python experiments/sweep.py --configs corners_6gw_12x8 corners_4gw_12x8
 
 # Un solo modelo
-PYTHONPATH=src python experiments/sweep.py --models rf
+PYTHONPATH=src python experiments/sweep.py --models mlp
 ```
 
-Los resultados se acumulan en `data/results/sweep_summary.csv`.
+Los resultados se acumulan en `data/results/sweep_summary.csv` con columna `simulator` para distinguir runs de path loss y Sionna RT.
 
 ### Resultados: path loss vs Sionna RT — 3 modelos, split 80/20
 
