@@ -10,9 +10,12 @@
 # Note: sionna also installs mitsuba and drjit as transitive dependencies.
 #
 # TensorFlow wheel selection:
-#   macOS (Intel + Apple Silicon) → tensorflow-macos (Apple's fork, last version: 2.13)
-#   Linux / Windows              → tensorflow-cpu
-tensorflow-macos==2.13.0; sys_platform == "darwin"
+#   macOS arm64 (Apple Silicon) → tensorflow>=2.14 (arm64 merged into main package from 2.14)
+#   Linux / Windows             → tensorflow-cpu
+#
+# Note: tensorflow-macos was discontinued after 2.13 and conflicts with
+# typing_extensions>=4.6.0. The main tensorflow package 2.14+ has no such conflict.
+tensorflow>=2.14,<2.16; sys_platform == "darwin"
 tensorflow-cpu>=2.13,<2.16; sys_platform != "darwin"
 sionna>=0.19,<0.20
 typing_extensions>=4.6.0  # IPython (via sionna->ipywidgets) requires TypeAliasType

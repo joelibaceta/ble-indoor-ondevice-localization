@@ -95,6 +95,18 @@ class FingerprintRfSettings:
 
 
 @dataclass(frozen=True)
+class FingerprintMlpSettings:
+    """MLP fingerprint trainer. No extra dependencies for training; TFLite export needs tensorflow."""
+
+    hidden_layer_sizes: list[int]
+    activation: str
+    learning_rate_init: float
+    max_iter: int
+    random_state: int
+    standardize_rssi: bool
+
+
+@dataclass(frozen=True)
 class SionnaRTSettings:
     """Sionna RT ray-tracing simulator config (requires pip install -r requirements-sionna.txt)."""
 
@@ -119,6 +131,7 @@ class ProjectConfig:
     baseline_knn: BaselineKnnSettings
     zone_knn: ZoneKnnSettings
     fingerprint_rf: FingerprintRfSettings
+    fingerprint_mlp: FingerprintMlpSettings
     training_data: TrainingDataSettings
     sionna_rt: SionnaRTSettings
 
@@ -187,6 +200,16 @@ class ProjectConfig:
             standardize_rssi=bool(rfo.get("standardize_rssi", True)),
         )
 
+        mlpo = raw.get("fingerprint_mlp", {})
+        fingerprint_mlp = FingerprintMlpSettings(
+            hidden_layer_sizes=list(mlpo.get("hidden_layer_sizes", [64, 32])),
+            activation=str(mlpo.get("activation", "relu")),
+            learning_rate_init=float(mlpo.get("learning_rate_init", 1e-3)),
+            max_iter=int(mlpo.get("max_iter", 500)),
+            random_state=int(mlpo.get("random_state", 42)),
+            standardize_rssi=bool(mlpo.get("standardize_rssi", True)),
+        )
+
         srt = raw.get("sionna_rt", {})
         sionna_rt = SionnaRTSettings(
             carrier_frequency_hz=float(srt.get("carrier_frequency_hz", 2.4e9)),
@@ -209,6 +232,7 @@ class ProjectConfig:
             baseline_knn=baseline_knn,
             zone_knn=zone_knn,
             fingerprint_rf=fingerprint_rf,
+            fingerprint_mlp=fingerprint_mlp,
             training_data=training_data,
             sionna_rt=sionna_rt,
         )

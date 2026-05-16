@@ -54,3 +54,13 @@ fingerprint_rf:
 
 training_data:
   training_trace_csv: "data/simulated/corners_6gw_12x8/training_trace.csv"
+
+sionna_rt:
+  carrier_frequency_hz: 2.4e9
+  max_depth: 5
+  num_samples: 1000000
+  grid_resolution_m: 0.25
+  gateway_height_m: 2.5
+  rx_height_m: 1.0
+  wall_material: concrete
+  cache_file: data/simulated/corners_6gw_12x8/sionna_rt_cache.npz

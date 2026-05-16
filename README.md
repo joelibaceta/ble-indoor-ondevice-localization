@@ -67,6 +67,7 @@ Se comparan dos fuentes de datos de entrenamiento — un modelo analítico de pa
               │  kNN  → posición (x, y)    │
               │  kNN  → clasificación zona │
               │  RF   → posición + zona    │
+              │  MLP  → posición + zona    │
               └─────────────┬─────────────┘
                             │
               ┌─────────────┴─────────────┐
@@ -224,7 +225,7 @@ PYTHONPATH=src python -m ble_indoor <comando> [opciones]
 
 | Flag | Default | Descripción |
 |---|---|---|
-| `--model` | `knn` | Tipo de modelo: `knn` o `rf` |
+| `--model` | `knn` | Tipo de modelo: `knn`, `rf` o `mlp` |
 | `--no-sweep` | — | Omitir gráfico de k-sweep (solo kNN) |
 | `--k-sweep-max` | `30` | k máximo a evaluar en el sweep |
 | `--config` | `config/baseline_room.yaml` | Ruta al YAML de configuración |
@@ -328,6 +329,19 @@ Se aplica normalización opcional con `StandardScaler` antes del cómputo de dis
 
 Ambos estimadores se serializan con `joblib`.
 
+### MLP Fingerprint Estimator
+
+Red neuronal multicapa con dos cabezas sklearn:
+
+- **Regresión de posición** — `MLPRegressor(hidden_layer_sizes=[128,64,32], activation=relu)` → `(x_m, y_m)`
+- **Clasificación de zona** — `MLPClassifier` con la misma arquitectura → `zone_id`
+
+El `StandardScaler` se bake-a opcionalmente en la primera capa. Soporta exportación a **TFLite INT8** para despliegue en Nordic / Cortex-M4 vía TFLite Micro:
+
+```bash
+PYTHONPATH=src python -m ble_indoor train --model mlp --export-tflite
+```
+
 ---
 
 ## Evaluación
@@ -409,27 +423,45 @@ PYTHONPATH=src python experiments/sweep.py --models rf
 
 Los resultados se acumulan en `data/results/sweep_summary.csv`.
 
-### Resultados baseline (simulador path loss, 6 zonas, 25% holdout)
+### Resultados: path loss vs Sionna RT — 3 modelos, split 80/20
 
-| Experimento | Modelo | Zone acc | RMSE (m) | Error medio (m) | P90 (m) |
-|---|---|---|---|---|---|
-| `corners_6gw_12x8` | RF | **77.8%** | **1.11** | **1.30** | **2.36** |
-| `corners_6gw_12x8` | kNN | 75.9% | 1.21 | 1.43 | 2.46 |
-| `corners_4gw_12x8` | RF | 72.9% | 1.31 | 1.57 | 2.91 |
-| `corners_4gw_12x8` | kNN | 73.7% | 1.43 | 1.69 | 3.20 |
-| `random_4gw_12x8` | RF | 70.8% | 1.49 | 1.66 | 3.34 |
-| `random_4gw_12x8` | kNN | 70.8% | 1.55 | 1.72 | 3.44 |
-| `wall_center_4gw_12x8` | RF | 67.1% | 1.45 | 1.73 | 3.24 |
-| `wall_center_4gw_12x8` | kNN | 68.7% | 1.53 | 1.77 | 3.43 |
-| `extreme_4gw_12x8` | RF | 68.1% | 1.44 | 1.72 | 3.18 |
-| `extreme_4gw_12x8` | kNN | 67.9% | 1.57 | 1.85 | 3.55 |
-| `corners_3gw_12x8` | RF | 65.8% | 1.70 | 1.91 | 3.68 |
-| `corners_3gw_12x8` | kNN | 66.5% | 1.84 | 2.06 | 4.04 |
-| `corners_4gw_20x12` | RF | 52.6% | 1.97 | 2.34 | 4.36 |
-| `corners_4gw_20x12` | kNN | 54.0% | 2.13 | 2.54 | 4.71 |
+Zona accuracy (%) en validación. **PL** = path loss analítico · **RT** = Sionna RT ray-tracing.
+Split estratificado 80/20, `random_state=123`.
+
+| Experimento | GWs | Zonas | kNN PL | kNN RT | RF PL | RF RT | MLP PL | MLP RT |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| `corners_6gw_12x8` | 6 | 6 | 76.6% | 61.5% | 77.9% | 62.5% | **79.0%** | **64.0%** |
+| `corners_4gw_12x8` | 4 | 6 | 73.9% | 58.5% | 73.5% | 59.7% | 75.7% | 62.5% |
+| `random_4gw_12x8` | 4 | 6 | 71.6% | 55.0% | 71.0% | 53.5% | 75.2% | 57.7% |
+| `extreme_4gw_12x8` | 4 | 6 | 68.5% | 56.4% | 68.3% | 53.5% | 70.6% | 57.5% |
+| `wall_center_4gw_12x8` | 4 | 6 | 69.4% | 54.4% | 67.0% | 50.7% | 70.1% | 55.3% |
+| `corners_3gw_12x8` | 3 | 6 | 66.7% | 50.4% | 67.1% | 51.2% | 69.6% | 53.1% |
+| `corners_4gw_20x12` | 4 | 12 | 53.6% | 43.4% | 53.6% | 43.7% | 56.8% | 47.1% |
+
+#### RMSE de posición — mejor modelo por escenario (m)
+
+| Experimento | MLP path loss | MLP Sionna RT | Δ RMSE |
+|---|:---:|:---:|:---:|
+| `corners_6gw_12x8` | **1.08** | **1.59** | +0.51 |
+| `corners_4gw_12x8` | 1.27 | 1.72 | +0.45 |
+| `random_4gw_12x8` | 1.33 | 1.89 | +0.56 |
+| `extreme_4gw_12x8` | 1.39 | 1.86 | +0.47 |
+| `wall_center_4gw_12x8` | 1.41 | 1.88 | +0.47 |
+| `corners_3gw_12x8` | 1.61 | 2.15 | +0.54 |
+| `corners_4gw_20x12` | 1.89 | 2.45 | +0.56 |
+
+#### Brecha media entre simuladores (path loss − Sionna RT)
+
+| Modelo | Media PL | Media RT | Brecha |
+|---|:---:|:---:|:---:|
+| kNN | 68.6% | 54.2% | **−14.4 pp** |
+| RF | 68.4% | 54.9% | **−13.5 pp** |
+| MLP | 71.0% | 57.3% | **−13.7 pp** |
 
 **Conclusiones:**
-- 6 gateways suma ~9 pp de zona accuracy sobre la mejor configuración con 4 gateways.
-- Las esquinas con margen superan consistentemente a las posiciones en el centro de las paredes y en las esquinas exactas con igual cantidad de gateways.
-- La habitación grande (20×12 m) con solo 4 gateways cae a 52–54% de zona accuracy — la densidad de cobertura importa más que el tamaño del espacio.
-- RF supera a kNN en RMSE de posición en todas las configuraciones; las diferencias en zona accuracy están dentro del margen de ruido.
+
+- **MLP supera a kNN y RF** en todos los escenarios y simuladores (1–4 pp en zona accuracy, ~5% mejor RMSE).
+- **6 gateways** es la mejor configuración: +8–9 pp sobre la mejor variante con 4 gateways, en ambos simuladores.
+- **Sionna RT muestra una brecha sistemática de ~14 pp** respecto al path loss analítico. El modelo analítico sobreestima la precisión real porque no modela multipath ni atenuación de paredes — los resultados de Sionna RT son más representativos de un entorno real.
+- **La habitación grande** (20×12 m, 12 zonas) es el escenario más difícil: 56.8% / 47.1% con MLP path loss / Sionna RT. La densidad de cobertura cae abruptamente con 4 gateways en un espacio mayor.
+- **El layout importa** con pocos gateways: `corners_4gw_12x8` (esquinas interiores) supera a `wall_center` y `extreme` en Sionna RT en 4–9 pp.

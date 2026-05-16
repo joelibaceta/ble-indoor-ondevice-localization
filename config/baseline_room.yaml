@@ -65,6 +65,14 @@ fingerprint_rf:
   random_state: 42
   standardize_rssi: true
 
+fingerprint_mlp:
+  hidden_layer_sizes: [128, 64, 32]
+  activation: relu
+  learning_rate_init: 0.001
+  max_iter: 1000
+  random_state: 42
+  standardize_rssi: true
+
 training_data:
   training_trace_csv: "data/simulated/training_trace.csv"
 

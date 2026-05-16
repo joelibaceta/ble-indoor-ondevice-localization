@@ -108,192 +108,201 @@ class SionnaRTSimulator:
     # Grid / scene helpers
     # ------------------------------------------------------------------
 
-    def _build_grid_xy(self) -> np.ndarray:
-        """Regular 2D grid of RX positions within the room boundaries."""
-        res = self._cfg.grid_resolution_m
-        xs = np.arange(res / 2, self._env.room.width_m, res, dtype=np.float64)
-        ys = np.arange(res / 2, self._env.room.height_m, res, dtype=np.float64)
-        grid = np.array(np.meshgrid(xs, ys, indexing="ij")).reshape(2, -1).T
-        return grid
-
     def _mitsuba_material_id(self) -> str:
         return "mat_wall"
 
     def _mitsuba_material_block(self) -> str:
-        """Sionna RT radio_material block for the scene XML."""
-        mat = self._cfg.wall_material.lower()
+        """Standard Mitsuba3 diffuse bsdf (radio properties set programmatically after load)."""
         mat_id = self._mitsuba_material_id()
-        if mat in ("concrete", "itu_concrete"):
-            # ITU-R P.2040 concrete at 2.4 GHz
+        return textwrap.dedent(f"""
+            <bsdf type="twosided" id="{mat_id}">
+              <bsdf type="diffuse">
+                <rgb name="reflectance" value="0.5, 0.5, 0.5"/>
+              </bsdf>
+            </bsdf>""")
+
+    def _assign_radio_material(self, scene: object, rt: object) -> None:
+        """Create a RadioMaterial and assign it to every object in the scene."""
+        cfg = self._cfg
+        if cfg.wall_material.lower() in ("concrete", "itu_concrete"):
             eps, sigma = 5.24, 0.014
         else:
-            eps = self._cfg.wall_permittivity if self._cfg.wall_permittivity is not None else 5.24
-            sigma = self._cfg.wall_conductivity if self._cfg.wall_conductivity is not None else 0.014
-        return textwrap.dedent(f"""
-            <bsdf type="radio_material" id="{mat_id}">
-              <float name="relative_permittivity" value="{eps}"/>
-              <float name="conductivity" value="{sigma}"/>
-            </bsdf>""")
+            eps = cfg.wall_permittivity if cfg.wall_permittivity is not None else 5.24
+            sigma = cfg.wall_conductivity if cfg.wall_conductivity is not None else 0.014
+        mat = rt.RadioMaterial("wall_mat", relative_permittivity=eps, conductivity=sigma)
+        scene.add(mat)  # type: ignore[attr-defined]
+        for obj in scene.objects.values():  # type: ignore[attr-defined]
+            obj.radio_material = "wall_mat"
+
+    @staticmethod
+    def _write_rect_ply(path: Path, v0, v1, v2, v3) -> None:
+        """Write a double-sided rectangle as two triangles to a PLY file."""
+        lines = [
+            "ply", "format ascii 1.0",
+            "element vertex 4",
+            "property float x", "property float y", "property float z",
+            "element face 4",
+            "property list uchar int vertex_indices",
+            "end_header",
+            f"{v0[0]:.6f} {v0[1]:.6f} {v0[2]:.6f}",
+            f"{v1[0]:.6f} {v1[1]:.6f} {v1[2]:.6f}",
+            f"{v2[0]:.6f} {v2[1]:.6f} {v2[2]:.6f}",
+            f"{v3[0]:.6f} {v3[1]:.6f} {v3[2]:.6f}",
+            "3 0 1 2", "3 0 2 3",  # front side
+            "3 0 2 1", "3 0 3 2",  # back side (for double-sided)
+        ]
+        path.write_text("\n".join(lines), encoding="utf-8")
 
     def _build_mitsuba_xml(self, tmp_dir: str) -> str:
         """Write a Mitsuba3 XML scene (closed rectangular room) and return its path.
 
         Sionna RT coordinate system: Y = vertical axis, room floor in XZ plane.
-        Room (x_m, y_m) maps to scene (x, 0, y_m); gateways at height gateway_height_m.
+        Room (x_m, y_m) maps to scene (x, *, y_m); gateways at height gateway_height_m.
+        Each surface is a PLY triangle mesh — Sionna RT only supports triangle meshes.
         """
         env = self._env
         w = env.room.width_m
-        d = env.room.height_m  # room depth along Z axis
+        d = env.room.height_m   # room depth along Z axis in scene
         h = self._cfg.gateway_height_m + 1.0  # ceiling slightly above gateways
         mat_id = self._mitsuba_material_id()
         mat_block = self._mitsuba_material_block()
+        td = Path(tmp_dir)
 
-        # 6 rectangle shapes: floor, ceiling, wall -X, wall +X, wall -Z, wall +Z.
-        # Each rectangle is a unit square in the XZ plane, scaled and translated.
+        # Build 6 surfaces as PLY files (vertices in scene XYZ: X=room_x, Y=height, Z=room_y)
+        surfaces = {
+            "floor":   ((0,0,0), (w,0,0), (w,0,d), (0,0,d)),
+            "ceiling": ((0,h,0), (0,h,d), (w,h,d), (w,h,0)),
+            "wall_x0": ((0,0,0), (0,0,d), (0,h,d), (0,h,0)),
+            "wall_xw": ((w,0,0), (w,h,0), (w,h,d), (w,0,d)),
+            "wall_z0": ((0,0,0), (0,h,0), (w,h,0), (w,0,0)),
+            "wall_zd": ((0,0,d), (w,0,d), (w,h,d), (0,h,d)),
+        }
+        shape_blocks = []
+        for name, (v0, v1, v2, v3) in surfaces.items():
+            ply_path = td / f"{name}.ply"
+            self._write_rect_ply(ply_path, v0, v1, v2, v3)
+            shape_blocks.append(textwrap.dedent(f"""\
+              <shape type="ply" id="{name}">
+                <string name="filename" value="{ply_path}"/>
+                <ref id="{mat_id}"/>
+              </shape>"""))
+
         xml = textwrap.dedent(f"""\
         <?xml version="1.0" encoding="utf-8"?>
         <scene version="3.0.0">
           {mat_block}
-          <!-- Floor (y=0) -->
-          <shape type="rectangle">
-            <transform name="to_world">
-              <scale x="{w / 2:.4f}" y="1" z="{d / 2:.4f}"/>
-              <translate x="{w / 2:.4f}" y="0" z="{d / 2:.4f}"/>
-              <rotate x="1" angle="-90"/>
-            </transform>
-            <ref id="{mat_id}"/>
-          </shape>
-          <!-- Ceiling (y=h) -->
-          <shape type="rectangle">
-            <transform name="to_world">
-              <scale x="{w / 2:.4f}" y="1" z="{d / 2:.4f}"/>
-              <translate x="{w / 2:.4f}" y="{h:.4f}" z="{d / 2:.4f}"/>
-              <rotate x="1" angle="90"/>
-            </transform>
-            <ref id="{mat_id}"/>
-          </shape>
-          <!-- Wall x=0 -->
-          <shape type="rectangle">
-            <transform name="to_world">
-              <scale x="{d / 2:.4f}" y="{h / 2:.4f}" z="1"/>
-              <translate x="0" y="{h / 2:.4f}" z="{d / 2:.4f}"/>
-              <rotate y="1" angle="90"/>
-            </transform>
-            <ref id="{mat_id}"/>
-          </shape>
-          <!-- Wall x=w -->
-          <shape type="rectangle">
-            <transform name="to_world">
-              <scale x="{d / 2:.4f}" y="{h / 2:.4f}" z="1"/>
-              <translate x="{w:.4f}" y="{h / 2:.4f}" z="{d / 2:.4f}"/>
-              <rotate y="1" angle="-90"/>
-            </transform>
-            <ref id="{mat_id}"/>
-          </shape>
-          <!-- Wall z=0 -->
-          <shape type="rectangle">
-            <transform name="to_world">
-              <scale x="{w / 2:.4f}" y="{h / 2:.4f}" z="1"/>
-              <translate x="{w / 2:.4f}" y="{h / 2:.4f}" z="0"/>
-              <rotate y="1" angle="180"/>
-            </transform>
-            <ref id="{mat_id}"/>
-          </shape>
-          <!-- Wall z=d -->
-          <shape type="rectangle">
-            <transform name="to_world">
-              <scale x="{w / 2:.4f}" y="{h / 2:.4f}" z="1"/>
-              <translate x="{w / 2:.4f}" y="{h / 2:.4f}" z="{d:.4f}"/>
-            </transform>
-            <ref id="{mat_id}"/>
-          </shape>
-        </scene>
-        """)
+        """) + "\n".join(f"  {b}" for b in shape_blocks) + "\n</scene>\n"
 
-        scene_path = str(Path(tmp_dir) / "room_scene.xml")
+        scene_path = str(td / "room_scene.xml")
         Path(scene_path).write_text(xml, encoding="utf-8")
         return scene_path
 
     # ------------------------------------------------------------------
-    # Sionna RT path computation (all Sionna/TF imports live here)
+    # Sionna RT precompute via coverage_map (all Sionna/TF imports live here)
     # ------------------------------------------------------------------
 
-    def _compute_path_gains(
-        self,
-        scene: object,
-        rx_positions: np.ndarray,
-    ) -> np.ndarray:
-        """Run Sionna RT path solver; return linear path gains (N_rx, N_tx).
-
-        All Sionna API surface is isolated in this method so version changes
-        only require updating here.
-        """
-        import tensorflow as tf
-        import sionna.rt as rt
-
-        rx_pos_tf = tf.constant(rx_positions, dtype=tf.float32)
-
-        solver = rt.PathSolver()
-        paths = solver(
-            scene,
-            rx_pos_tf,
-            max_depth=self._cfg.max_depth,
-            num_samples=self._cfg.num_samples,
-            los=True,
-            reflection=True,
-            diffraction=False,
-            scattering=False,
-        )
-        # CIR: a shape varies by Sionna version; we reduce over all non-batch dims.
-        a, _ = paths.cir()
-        a_np = a.numpy() if hasattr(a, "numpy") else np.array(a)
-        # Sum |a_i|^2 over all paths and antenna dims except (n_rx, n_tx)
-        # Typical shape: [n_rx, n_tx, n_rx_ant, n_tx_ant, n_clusters, n_paths] (complex)
-        sq = np.abs(a_np) ** 2
-        # Collapse all dims after first two
-        path_gains = sq.reshape(sq.shape[0], sq.shape[1], -1).sum(axis=-1)  # (n_rx, n_tx)
-        return path_gains.astype(np.float64)
-
     def _run_sionna_precompute(self) -> tuple[np.ndarray, np.ndarray]:
-        """Run full Sionna RT precomputation; return (grid_xy, grid_rssi_dbm)."""
+        """Run Sionna RT coverage_map for all gateways; return (grid_xy, grid_rssi_dbm).
+
+        Uses scene.coverage_map() which evaluates path gain over a regular 2D grid
+        at a fixed receiver height — the natural API for this use case in Sionna 0.19.
+        All Sionna/TF imports are confined here.
+        """
         import sionna.rt as rt
 
-        grid_xy = self._build_grid_xy()
-        n_points = len(grid_xy)
-        n_gateways = len(self._env.gateways)
-        rx_h = self._cfg.rx_height_m
-
-        # Build 3D receiver positions: (n_rx, 3) in scene coords (x, rx_height, z)
-        rx_positions = np.column_stack([
-            grid_xy[:, 0],
-            np.full(n_points, rx_h, dtype=np.float64),
-            grid_xy[:, 1],
-        ]).astype(np.float32)
+        env = self._env
+        cfg = self._cfg
+        res = cfg.grid_resolution_m
+        room_w = env.room.width_m
+        room_d = env.room.height_m  # room depth → Sionna Z axis
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             scene_path = self._build_mitsuba_xml(tmp_dir)
             scene = rt.load_scene(scene_path)
-            scene.frequency = self._cfg.carrier_frequency_hz
+            scene.frequency = cfg.carrier_frequency_hz
 
-            for gw in self._env.gateways:
-                tx = rt.Transmitter(
+            # Assign EM material properties to all scene geometry
+            self._assign_radio_material(scene, rt)
+
+            # Single isotropic antenna for TX and RX (BLE badge approximation)
+            iso_array = rt.PlanarArray(
+                num_rows=1, num_cols=1,
+                vertical_spacing=0.5, horizontal_spacing=0.5,
+                pattern="iso", polarization="V",
+            )
+            scene.tx_array = iso_array
+            scene.rx_array = iso_array
+
+            # Add one Transmitter per gateway
+            for gw in env.gateways:
+                scene.add(rt.Transmitter(
                     name=gw.id,
-                    position=[gw.x_m, self._cfg.gateway_height_m, gw.y_m],
-                )
-                scene.add(tx)
+                    position=[gw.x_m, cfg.gateway_height_m, gw.y_m],
+                ))
 
-            print(f"[SionnaRTSimulator] Precomputing {n_points} RX positions × {n_gateways} gateways...")
-            path_gains = self._compute_path_gains(scene, rx_positions)  # (n_rx, n_tx)
+            n_gw = len(env.gateways)
+            print(
+                f"[SionnaRTSimulator] Computing coverage map "
+                f"({room_w}×{room_d} m, res={res} m, {cfg.num_samples} rays, "
+                f"{n_gw} gateways)…"
+            )
 
-        # Convert linear path gain to dBm
-        rssi_grid = np.full((n_points, n_gateways), -200.0, dtype=np.float64)
-        for gw_idx, gw in enumerate(self._env.gateways):
-            gains = path_gains[:, gw_idx]
+            # coverage_map evaluates ALL transmitters simultaneously.
+            # Sionna coords: Y = vertical axis, room floor = XZ plane.
+            # cm_orientation=[0, 0, π/2] rotates the CM 90° around X so that
+            # its local Y axis aligns with scene Z (room depth), placing the
+            # CM in the horizontal XZ plane at height rx_height_m.
+            # cm_size = [room_w, room_d] → spans the full room floor.
+            import math
+            cm = scene.coverage_map(
+                rx_orientation=(0.0, 0.0, 0.0),
+                max_depth=cfg.max_depth,
+                cm_center=[room_w / 2.0, cfg.rx_height_m, room_d / 2.0],
+                cm_orientation=[0.0, 0.0, math.pi / 2.0],
+                cm_size=[room_w, room_d],
+                cm_cell_size=[res, res],
+                num_samples=cfg.num_samples,
+                los=True,
+                reflection=True,
+                diffraction=False,
+                scattering=False,
+            )
+
+        # path_gain: [n_tx, n_cells_x, n_cells_y]  (linear power ratio)
+        # cell_centers: [n_cells_x, n_cells_y, 3]  (x, y_height, z in scene coords)
+        path_gain_np = cm.path_gain.numpy()     # (n_tx, nx, ny)
+        cell_centers = cm.cell_centers.numpy()  # (nx, ny, 3)
+
+        nx, ny = cell_centers.shape[:2]
+        n_points = nx * ny
+
+        # Convert scene (x, height, z) → room (x, y): x_room=x_scene, y_room=z_scene
+        grid_xy = np.column_stack([
+            cell_centers[:, :, 0].ravel(),   # x_room
+            cell_centers[:, :, 2].ravel(),   # y_room
+        ])  # (N, 2)
+
+        # Calibrate TX power so Sionna RSSI aligns with path-loss convention.
+        # In path-loss models, tx_power_dbm is the RSSI at 1 m (reference RSSI), not
+        # the radiated power. Sionna uses the actual radiated power. To recover the
+        # same reference: actual_tx_dbm = ref_rssi_1m + FSPL(1m, f).
+        # FSPL at 1 m = 20*log10(4π*f/c)  [dB]
+        _c = 3e8
+        _fspl_1m = 20.0 * np.log10(4.0 * np.pi * cfg.carrier_frequency_hz / _c)
+
+        # Convert linear path gain to RSSI dBm per gateway
+        rssi_grid = np.full((n_points, n_gw), -200.0, dtype=np.float64)
+        for gw_idx, gw in enumerate(env.gateways):
+            actual_tx_dbm = gw.tx_power_dbm + _fspl_1m
+            gains = path_gain_np[gw_idx].ravel().astype(np.float64)
             valid = gains > 1e-30
-            rssi_grid[valid, gw_idx] = 10.0 * np.log10(gains[valid]) + gw.tx_power_dbm
+            rssi_grid[valid, gw_idx] = 10.0 * np.log10(gains[valid]) + actual_tx_dbm
 
-        print(f"[SionnaRTSimulator] Precompute complete. RSSI range: "
-              f"{rssi_grid[rssi_grid > -200].min():.1f} … {rssi_grid.max():.1f} dBm")
+        valid_mask = rssi_grid > -200
+        print(
+            f"[SionnaRTSimulator] Done. Grid: {nx}×{ny}={n_points} cells. "
+            f"RSSI range: {rssi_grid[valid_mask].min():.1f}…{rssi_grid[valid_mask].max():.1f} dBm"
+        )
         return grid_xy, rssi_grid
 
     def _precompute(self) -> None:

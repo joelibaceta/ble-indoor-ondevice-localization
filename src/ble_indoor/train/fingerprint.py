@@ -10,12 +10,12 @@ from typing import Any, Literal
 import numpy as np
 from sklearn.model_selection import train_test_split
 
-from ble_indoor import FingerprintKnnEstimator, FingerprintRfEstimator, ProjectConfig, ProjectLayout
+from ble_indoor import FingerprintKnnEstimator, FingerprintMlpEstimator, FingerprintRfEstimator, ProjectConfig, ProjectLayout
 from ble_indoor.evaluation.knn_sweep import sweep_k_neighbors
 from ble_indoor.models.knn_zone import ZONE_ID_COLUMN
 from ble_indoor.simulation.trace_loader import load_training_trace
 
-ModelId = Literal["knn", "rf"]
+ModelId = Literal["knn", "rf", "mlp"]
 
 
 @dataclass(frozen=True)
@@ -36,7 +36,7 @@ def train_fingerprint_model(
     no_sweep: bool = False,
     k_sweep_max: int = 30,
     random_state: int = 123,
-    test_size: float = 0.25,
+    test_size: float = 0.20,
 ) -> FingerprintTrainResult:
     """
     Carga el CSV de entrenamiento, hace split train/val, ajusta el modelo y guarda
@@ -97,7 +97,7 @@ def train_fingerprint_model(
                 results_dir / "validation_vs_k.png",
                 mark_k=k_mark,
             )
-    else:
+    elif model == "rf":
         est = FingerprintRfEstimator.from_config(cfg)
         est.fit(train_df, fit_zone=True)
         metrics["model"] = {
@@ -106,6 +106,20 @@ def train_fingerprint_model(
             "max_depth": est.max_depth,
             "random_state": est.random_state,
             "standardize_rssi": est.standardize_rssi,
+        }
+    else:
+        est = FingerprintMlpEstimator.from_config(cfg)
+        est.fit(train_df, fit_zone=True)
+        metrics["model"] = {
+            "type": "mlp",
+            "hidden_layer_sizes": list(est.hidden_layer_sizes),
+            "activation": est.activation,
+            "learning_rate_init": est.learning_rate_init,
+            "max_iter": est.max_iter,
+            "random_state": est.random_state,
+            "standardize_rssi": est.standardize_rssi,
+            "position_n_iter": getattr(est._position, "n_iter_", None),
+            "zone_n_iter": getattr(est._zone, "n_iter_", None),
         }
 
     metrics["train"] = est.evaluate(train_df)

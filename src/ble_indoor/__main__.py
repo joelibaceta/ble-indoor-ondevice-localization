@@ -45,6 +45,15 @@ def _cmd_train(args: argparse.Namespace) -> None:
     print(result.model_path.resolve())
     print(result.metrics_path.resolve())
 
+    if args.model == "mlp" and args.export_tflite:
+        from ble_indoor.models.fingerprint_mlp import FingerprintMlpEstimator
+
+        est = FingerprintMlpEstimator.load(result.model_path)
+        quantize = not args.no_quantize
+        tflite_path = result.results_dir / f"model_{'int8' if quantize else 'f32'}.tflite"
+        est.export_tflite(tflite_path, quantize=quantize)
+        print(tflite_path.resolve())
+
 
 def _cmd_generate_csv(args: argparse.Namespace) -> None:
     _bootstrap_paths()
@@ -135,11 +144,13 @@ def main() -> None:
     p = argparse.ArgumentParser(prog="python -m ble_indoor", description="CLI BLE indoor (desde la raíz del repo con PYTHONPATH=src).")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    t = sub.add_parser("train", help="Entrenar fingerprint kNN o RandomForest")
-    t.add_argument("--model", choices=("knn", "rf"), default="knn")
+    t = sub.add_parser("train", help="Entrenar fingerprint kNN, RandomForest o MLP")
+    t.add_argument("--model", choices=("knn", "rf", "mlp"), default="knn")
     t.add_argument("--no-sweep", action="store_true", help="(kNN) Sin gráfico validation_vs_k")
     t.add_argument("--k-sweep-max", type=int, default=30, metavar="K")
     t.add_argument("--config", default=None, metavar="YAML", help="Ruta al YAML de configuración (default: config/baseline_room.yaml)")
+    t.add_argument("--export-tflite", action="store_true", help="(mlp) Exportar modelo a TFLite tras el entrenamiento")
+    t.add_argument("--no-quantize", action="store_true", help="(mlp) Exportar en float32 en lugar de INT8")
     t.set_defaults(func=_cmd_train)
 
     g = sub.add_parser("generate-csv", help="CSV de entrenamiento (path loss o Sionna RT)")

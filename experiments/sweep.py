@@ -49,7 +49,13 @@ def load_metrics(config_path: Path, model: str) -> dict | None:
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Sweep all experiment configs")
-    p.add_argument("--models", nargs="+", choices=("knn", "rf"), default=["knn", "rf"])
+    p.add_argument("--models", nargs="+", choices=("knn", "rf", "mlp"), default=["knn", "rf", "mlp"])
+    p.add_argument(
+        "--simulator",
+        choices=("pathloss", "sionna"),
+        default="pathloss",
+        help="RSSI source for CSV generation (default: pathloss)",
+    )
     p.add_argument("--force", action="store_true", help="Regenerate CSV even if it exists")
     p.add_argument(
         "--configs",
@@ -75,7 +81,7 @@ def main() -> None:
 
     for cfg in all_configs:
         exp = cfg.stem
-        gen_cmd = base_cmd + ["generate-csv", "--config", str(cfg)]
+        gen_cmd = base_cmd + ["generate-csv", "--config", str(cfg), "--simulator", args.simulator]
         if args.force:
             gen_cmd.append("--force")
         ok = run(gen_cmd, f"[{exp}] generate-csv")
@@ -93,6 +99,7 @@ def main() -> None:
                     pos = val.get("position", {})
                     zone = val.get("zone", {})
                     results.append({
+                        "simulator": args.simulator,
                         "experiment": exp,
                         "model": model,
                         "n_train": m.get("n_train"),
@@ -110,7 +117,7 @@ def main() -> None:
     print(f"\n{'='*60}")
     print("  SWEEP SUMMARY")
     print(f"{'='*60}")
-    header = f"{'experiment':<30} {'model':<5} {'zone_acc':>9} {'rmse_m':>8} {'mean_m':>8} {'p90_m':>8}"
+    header = f"{'simulator':<10} {'experiment':<30} {'model':<5} {'zone_acc':>9} {'rmse_m':>8} {'mean_m':>8} {'p90_m':>8}"
     print(header)
     print("-" * len(header))
     for r in results:
@@ -118,18 +125,19 @@ def main() -> None:
         rmse = f"{r['rmse_m']:.3f}" if r["rmse_m"] is not None else "   —"
         mean = f"{r['mean_m']:.3f}" if r["mean_m"] is not None else "   —"
         p90 = f"{r['p90_m']:.3f}" if r["p90_m"] is not None else "   —"
-        print(f"{r['experiment']:<30} {r['model']:<5} {zone_acc:>9} {rmse:>8} {mean:>8} {p90:>8}")
+        print(f"{r['simulator']:<10} {r['experiment']:<30} {r['model']:<5} {zone_acc:>9} {rmse:>8} {mean:>8} {p90:>8}")
 
     # Save CSV summary — merge with any existing rows for experiments not in this run
     import csv
     summary_path = REPO_ROOT / "data" / "results" / "sweep_summary.csv"
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     existing: list[dict] = []
-    run_keys = {(r["experiment"], r["model"]) for r in results}
+    run_keys = {(r["simulator"], r["experiment"], r["model"]) for r in results}
     if summary_path.is_file():
         with summary_path.open(newline="") as f:
             for row in csv.DictReader(f):
-                if (row["experiment"], row["model"]) not in run_keys:
+                key = (row.get("simulator", "pathloss"), row["experiment"], row["model"])
+                if key not in run_keys:
                     existing.append(row)
     all_rows = existing + results
     with summary_path.open("w", newline="") as f:
