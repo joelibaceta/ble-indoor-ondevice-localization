@@ -31,7 +31,9 @@ Este proyecto investiga si un **modelo de fingerprinting compacto ejecutado en e
 - Reducción del tráfico BLE (transmitir posición, no RSSI en crudo)
 - Baselines desplegables para clasificación de zonas y estimación continua de posición
 
-Se comparan dos fuentes de datos de entrenamiento — un modelo analítico de path loss y un simulador de ray tracing físico (Sionna RT) — y se evalúan tres modelos (kNN, Random Forest, MLP) bajo 7 configuraciones de gateways. El MLP se puede exportar a **TFLite INT8** para inferencia directa en hardware embebido.
+La literatura señala que el RSSI indoor es inherentemente ruidoso por reflexiones, difracción y pérdida de visión directa (NLOS), y que los modelos analíticos de path loss sobreestiman sistemáticamente la precisión de los clasificadores fingerprint al no capturar estos fenómenos [[3]](#referencias). Para generar datos de entrenamiento más representativos de entornos reales, el proyecto integra **Sionna RT** [[1]](#referencias) como simulador de ray tracing físico, complementando el modelo analítico de path loss. Los resultados experimentales confirman empíricamente esta brecha: ~14 puntos porcentuales de zona accuracy entre ambos simuladores, consistentes con los hallazgos de la literatura sobre el Sim-to-Real gap en RF [[7]](#referencias).
+
+Se evalúan tres modelos (kNN, Random Forest, MLP) bajo 7 configuraciones de gateways y ambos simuladores. El MLP se puede exportar a **TFLite INT8** para inferencia directa en hardware embebido.
 
 ---
 
@@ -310,7 +312,13 @@ Rápido y determinista. Adecuado para prototipos y verificaciones de reproducibi
 
 ### SionnaRTSimulator
 
-Ray tracing físico usando [Sionna RT](https://nvlabs.github.io/sionna/) (NVIDIA). La habitación se modela como una escena rectangular cerrada Mitsuba 3 (suelo, techo, 4 paredes) con propiedades de material de hormigón ITU-R P.2040.
+Ray tracing físico usando [Sionna RT](https://nvlabs.github.io/sionna/) (NVIDIA) [[1, 2]](#referencias). Sionna RT fue diseñado explícitamente para generación de datasets sintéticos, gemelos digitales de RF y localización [[2]](#referencias) — exactamente el caso de uso de este proyecto.
+
+#### ¿Por qué ray tracing en lugar de solo path loss?
+
+El modelo log-distancia asume propagación esférica libre y captura el ruido de shadowing con una variable gaussiana independiente. En interiores esto no es suficiente: las reflexiones en paredes, suelo y techo generan interferencia constructiva y destructiva que crea variaciones espaciales de RSSI no predecibles por el modelo analítico [[3]](#referencias). Esta diferencia tiene consecuencias directas sobre los clasificadores fingerprint: un modelo entrenado con datos de path loss aprende un mapa de RSSI que no existe en la realidad, sobreestimando la separabilidad de zonas. Los resultados de este proyecto lo confirman cuantitativamente: **~14 pp de diferencia** en zona accuracy entre path loss y Sionna RT, consistentes con el Sim-to-Real gap documentado en [[7]](#referencias).
+
+La escena se modela como una habitación rectangular cerrada (suelo + techo + 4 paredes, meshes PLY triangulados) con propiedades dieléctricas de hormigón ITU-R P.2040 (ε=5.24, σ=0.014 S/m).
 
 **Flujo de trabajo:**
 1. Construye una escena Mitsuba 3 rectangular (suelo + techo + 4 paredes como meshes PLY) con material concreto ITU-R P.2040.
@@ -536,3 +544,21 @@ Split estratificado 80/20, `random_state=123`.
 - **Sionna RT muestra una brecha sistemática de ~14 pp** respecto al path loss analítico. El modelo analítico sobreestima la precisión real porque no modela multipath ni atenuación de paredes — los resultados de Sionna RT son más representativos de un entorno real.
 - **La habitación grande** (20×12 m, 12 zonas) es el escenario más difícil: 56.8% / 47.1% con MLP path loss / Sionna RT. La densidad de cobertura cae abruptamente con 4 gateways en un espacio mayor.
 - **El layout importa** con pocos gateways: `corners_4gw_12x8` (esquinas interiores) supera a `wall_center` y `extreme` en Sionna RT en 4–9 pp.
+
+---
+
+## Referencias
+
+[1] Hoydis, J., Aoudia, F. A., Cammerer, S., Nimier-David, M., Binder, N., Marcus, G., & Keller, A. (2023). **Sionna RT: Differentiable Ray Tracing for Radio Propagation Modeling.** *arXiv:2303.11103*. https://arxiv.org/abs/2303.11103
+
+[2] NVIDIA Research. (2025). **Sionna RT Technical Report.** https://research.nvidia.com/publication/2025-04_sionna-rt-technical-report
+
+[3] Bregar, K., Mohorčič, M., & Mohorčič, M. (2024). **BLE-Based Indoor Localization: Analysis of Some Solutions for Performance Improvement.** *MDPI Sensors*, 24(2):376. https://www.mdpi.com/1424-8220/24/2/376
+
+[4] Shi, G., et al. (2024). **A Survey of Bluetooth Indoor Localization.** *arXiv:2404.12529*. https://arxiv.org/pdf/2404.12529
+
+[5] Gentner, C., et al. (2024). **Robust Bluetooth AoA Estimation for Indoor Localization.** *MDPI Applied Sciences*, 14(14):6208. https://www.mdpi.com/2076-3417/14/14/6208
+
+[6] Chen, L., et al. (2025). **A Bluetooth Indoor Positioning System Based on Deep Learning with RSSI and AoA.** *MDPI Sensors*, 25(9):2834. https://www.mdpi.com/1424-8220/25/9/2834
+
+[7] Hoydis, J., et al. (2023). **Learning Radio Environments by Differentiable Ray Tracing.** *arXiv:2311.18558*. https://arxiv.org/abs/2311.18558
